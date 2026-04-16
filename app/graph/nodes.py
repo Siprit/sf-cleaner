@@ -5,7 +5,9 @@ import os
 
 import structlog
 
+from app.enrichment.apollo import get_apollo_adapter
 from app.enrichment.linkedin import LinkedInAdapter
+from app.enrichment.verify import CONFIDENCE_DELTAS, verify_email
 from app.enrichment.zoominfo import get_zoominfo_adapter
 from app.graph.state import LeadState
 from app.reconcile.rules import reconcile
@@ -62,13 +64,49 @@ async def zoominfo_enrich(state: LeadState) -> LeadState:
         return {**state, "zoominfo_data": None}
 
 
+async def apollo_enrich(state: LeadState) -> LeadState:
+    adapter = get_apollo_adapter()
+    try:
+        result = await adapter.enrich(state["raw_lead"])
+        return {**state, "apollo_data": dict(result) if result else None}
+    except Exception as exc:
+        log.warning("apollo_enrich_failed", lead_id=state["lead_id"], error=str(exc))
+        return {**state, "apollo_data": None}
+
+
 async def reconcile_data(state: LeadState) -> LeadState:
     merged, confidence = await reconcile(
         lead=state["raw_lead"],
         linkedin=state.get("linkedin_data"),
         zoominfo=state.get("zoominfo_data"),
+        apollo=state.get("apollo_data"),
     )
     return {**state, "reconciled": merged, "confidence": confidence}
+
+
+async def verify_email_node(state: LeadState) -> LeadState:
+    """Verify the reconciled email and adjust confidence accordingly."""
+    reconciled = state.get("reconciled") or {}
+    email = reconciled.get("email") or (state.get("raw_lead") or {}).get("Email")
+
+    if not email:
+        return {**state, "email_verification": None}
+
+    try:
+        status = await verify_email(email)
+        delta = CONFIDENCE_DELTAS[status]
+        current_conf = state.get("confidence", 0.0)
+        new_conf = max(0.0, min(1.0, current_conf + delta))
+        log.info(
+            "email_verified",
+            lead_id=state["lead_id"],
+            status=status.value,
+            confidence_delta=delta,
+        )
+        return {**state, "email_verification": status.value, "confidence": new_conf}
+    except Exception as exc:
+        log.warning("email_verify_failed", lead_id=state["lead_id"], error=str(exc))
+        return {**state, "email_verification": None}
 
 
 async def score_lead(state: LeadState) -> LeadState:

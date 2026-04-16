@@ -66,12 +66,19 @@ async def test_cache_hit_skips_enrichment():
 
 @pytest.mark.asyncio
 async def test_low_confidence_goes_to_review():
-    """Low confidence result → action=review."""
+    """Email verification returning INVALID drops confidence below threshold → action=review.
+
+    Reconcile assigns 0.80 when both sources have conflicting valid emails (deterministic
+    preference, no LLM call). The verify_email_node then applies the INVALID delta (−0.20),
+    landing at 0.60 which is below the 0.80 threshold.
+    """
+    from app.enrichment.verify import VerifyStatus
+
     with (
         patch("app.graph.nodes._get_cache") as mock_cache_factory,
         patch("app.graph.nodes._get_linkedin") as mock_li_factory,
         patch("app.enrichment.zoominfo.get_zoominfo_adapter") as mock_zi_factory,
-        patch("app.reconcile.llm_fallback.llm_resolve", new_callable=AsyncMock) as mock_llm,
+        patch("app.graph.nodes.verify_email", new_callable=AsyncMock) as mock_verify,
     ):
         mock_cache = AsyncMock()
         mock_cache.lookup.return_value = None
@@ -87,8 +94,8 @@ async def test_low_confidence_goes_to_review():
         mock_zi.enrich.return_value = {"email": "jane2@acme.com", "phone": None, "source": "zoominfo"}
         mock_zi_factory.return_value = mock_zi
 
-        # Ollama returns low confidence
-        mock_llm.return_value = ("jane1@acme.com", 0.50)
+        # Verification flags the winning email as invalid → −0.20 delta
+        mock_verify.return_value = VerifyStatus.INVALID
 
         initial: LeadState = {"lead_id": LEAD["id"], "raw_lead": LEAD, "cache_hit": False, "confidence": 0.0}
         result = await enrichment_graph.ainvoke(initial)

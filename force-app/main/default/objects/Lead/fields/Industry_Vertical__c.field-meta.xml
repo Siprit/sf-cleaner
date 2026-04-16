@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Industry_Vertical__c</fullName>
+    <label>Industry Vertical</label>
+    <type>Text</type>
+    <length>255</length>
+    <description>Industry vertical sourced from LinkedIn / Apollo enrichment</description>
+</CustomField>

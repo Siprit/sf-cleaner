@@ -149,10 +149,16 @@ class SalesforceClient:
                 "Email": u.email or "",
                 "Phone": u.phone or "",
                 "Lead_Score__c": str(u.lead_score) if u.lead_score is not None else "",
+                "Company_Size__c": u.company_size or "",
+                "Industry_Vertical__c": u.industry or "",
+                "Annual_Revenue__c": u.annual_revenue or "",
+                "Tech_Stack__c": u.tech_stack or "",
             }
             for u in updates
         ]
-        csv_body = self._to_csv(rows, fieldnames=["Id", "Email", "Phone", "Lead_Score__c"])
+        fieldnames = ["Id", "Email", "Phone", "Lead_Score__c",
+                      "Company_Size__c", "Industry_Vertical__c", "Annual_Revenue__c", "Tech_Stack__c"]
+        csv_body = self._to_csv(rows, fieldnames=fieldnames)
 
         job_id = self._create_ingest_job()
         self._upload_csv(job_id, csv_body)

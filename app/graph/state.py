@@ -11,6 +11,10 @@ class LeadState(TypedDict, total=False):
     cache_hit: bool
     action: Literal["update", "review", "skip"]
     error: str | None
+    # Email verification
+    email_verification: str | None  # VerifyStatus value: valid/invalid/catch_all/unknown
+    # Apollo
+    apollo_data: dict | None        # result from Apollo adapter
     # Scoring
     lead_score: float | None        # 0–100 composite; written to Lead_Score__c
     score_breakdown: dict | None    # {completeness, activity, marketing} for observability

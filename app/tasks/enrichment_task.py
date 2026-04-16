@@ -66,6 +66,10 @@ def enrich_lead_batch(self, leads: list[dict]) -> dict:
                         email=reconciled.get("email"),
                         phone=reconciled.get("phone"),
                         lead_score=result.get("lead_score"),
+                        company_size=reconciled.get("company_size"),
+                        industry=reconciled.get("industry"),
+                        annual_revenue=reconciled.get("annual_revenue"),
+                        tech_stack=reconciled.get("tech_stack"),
                     )
                 )
             elif action == "review":
@@ -79,7 +83,7 @@ def enrich_lead_batch(self, leads: list[dict]) -> dict:
     except Exception as exc:
         raise self.retry(exc=exc)
 
-    return {
+    result = {
         "total": len(leads),
         "updated": len(updates),
         "review": len(review),
@@ -87,3 +91,24 @@ def enrich_lead_batch(self, leads: list[dict]) -> dict:
         "errors": errors,
         "review_ids": review,
     }
+
+    # Push metrics to Redis asynchronously (best-effort — don't fail the task)
+    async def _emit_metrics():
+        from app.api.stats import MetricsWriter
+        writer = MetricsWriter()
+        try:
+            await writer.record_batch_result(
+                total=result["total"],
+                updated=result["updated"],
+                review=result["review"],
+            )
+            await writer.set_last_run_timestamp()
+        finally:
+            await writer.aclose()
+
+    try:
+        asyncio.run(_emit_metrics())
+    except Exception:
+        pass
+
+    return result

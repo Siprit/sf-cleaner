@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Annual_Revenue__c</fullName>
+    <label>Annual Revenue (Enriched)</label>
+    <type>Text</type>
+    <length>50</length>
+    <description>Annual revenue string sourced from Apollo enrichment (e.g. "$5M")</description>
+</CustomField>

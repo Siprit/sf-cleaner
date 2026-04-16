@@ -23,4 +23,8 @@ class LeadUpdate(BaseModel):
     id: str
     email: str | None = None
     phone: str | None = None
-    lead_score: float | None = None  # maps to Lead_Score__c custom field
+    lead_score: float | None = None       # Lead_Score__c
+    company_size: str | None = None       # Company_Size__c
+    industry: str | None = None           # Industry_Vertical__c
+    annual_revenue: str | None = None     # Annual_Revenue__c
+    tech_stack: str | None = None         # Tech_Stack__c

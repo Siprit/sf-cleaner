@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Tech_Stack__c</fullName>
+    <label>Tech Stack</label>
+    <type>LongTextArea</type>
+    <length>1000</length>
+    <visibleLines>3</visibleLines>
+    <description>Comma-separated top technologies used by the lead's company, sourced from Apollo</description>
+</CustomField>
