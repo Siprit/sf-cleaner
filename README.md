@@ -1,6 +1,6 @@
 # sf-cleaner
 
-Enriches stale Salesforce lead records (email, phone) at scale using LinkedIn Sales Navigator and ZoomInfo as sources of truth. Designed to process 500k+ leads nightly with near-zero LLM API cost.
+Enriches stale Salesforce lead records (email, phone, firmographics) at scale using LinkedIn Sales Navigator, ZoomInfo, and Apollo as sources of truth. Designed to process 500k+ leads nightly with near-zero LLM API cost.
 
 ---
 
@@ -17,15 +17,20 @@ Redis + Celery  ──  fan out into batches of 1,000 leads
     │
     ▼  (per lead, in parallel workers)
 LangGraph Workflow
-    ├── check_cache       vector DB lookup — skip if recently enriched (90-day TTL)
-    ├── linkedin_enrich   LinkedIn Sales Navigator People Search
-    ├── zoominfo_enrich   ZoomInfo Enrich API (pluggable; stub until credentials available)
-    ├── reconcile_data    rule engine → Ollama fallback only for genuine conflicts (~10% of leads)
-    ├── confidence_score  score ≥ 0.80 → auto-update │ score < 0.80 → human review queue
-    └── update_cache      store result in vector DB for future runs
+    ├── check_cache          vector DB lookup — skip if recently enriched (90-day TTL)
+    ├── linkedin_enrich      LinkedIn Sales Navigator People Search
+    ├── zoominfo_enrich      ZoomInfo Enrich API (pluggable; stub until credentials available)
+    ├── apollo_enrich        Apollo People Match (third-priority fallback)
+    ├── reconcile_data       rule engine → Ollama fallback only for genuine conflicts (~10%)
+    ├── verify_email_node    ZeroBounce / NeverBounce email verification
+    ├── score_lead           composite lead score (completeness + activity + marketing)
+    ├── confidence_score     score ≥ 0.80 → auto-update │ score < 0.80 → human review queue
+    └── update_cache         store result in vector DB for future runs
     │
     ▼
-Salesforce Bulk API 2.0  ──  write updated email/phone back to Lead records
+Salesforce Bulk API 2.0  ──  write updated fields back to Lead records
+    (Email, Phone, Lead_Score__c, Company_Size__c, Industry_Vertical__c,
+     Annual_Revenue__c, Tech_Stack__c)
 ```
 
 ### Cost control
@@ -54,6 +59,8 @@ Salesforce Bulk API 2.0  ──  write updated email/phone back to Lead records
 | Salesforce | `simple-salesforce` + Bulk API 2.0 |
 | LinkedIn | Sales Navigator People Search API |
 | ZoomInfo | Enrich API (stub until keys available) |
+| Apollo | People Match API (third-priority fallback) |
+| Email verification | ZeroBounce (primary) + NeverBounce (fallback) |
 | API | FastAPI |
 
 ---
@@ -64,13 +71,15 @@ Salesforce Bulk API 2.0  ──  write updated email/phone back to Lead records
 sf-cleaner/
 ├── app/
 │   ├── salesforce/       # OAuth JWT Bearer client + Bulk API 2.0 read/write
-│   ├── enrichment/       # Pluggable source adapters (LinkedIn, ZoomInfo)
+│   ├── enrichment/       # Pluggable source adapters (LinkedIn, ZoomInfo, Apollo, email verify)
 │   ├── graph/            # LangGraph workflow (nodes, state, compiled graph)
 │   ├── vector/           # Vector store abstraction, embeddings, cache
 │   ├── reconcile/        # Rule engine + Ollama fallback
+│   ├── scoring/          # Composite lead score (completeness, activity, marketing)
 │   ├── tasks/            # Celery app + enrichment task
 │   ├── scheduler/        # Airflow DAG
-│   └── api/              # FastAPI service (health, trigger, task status)
+│   └── api/              # FastAPI service (health, trigger, stats, webhook)
+├── force-app/            # Salesforce custom field metadata (Lead_Score__c, firmographics)
 ├── tests/
 ├── docker-compose.yml    # Redis, pgvector, Ollama, API, Celery worker
 ├── pyproject.toml
@@ -91,8 +100,11 @@ Fill in:
 - `SF_USERNAME`, `SF_CONSUMER_KEY`, `SF_PRIVATE_KEY_PATH` — Salesforce Connected App (JWT Bearer flow)
 - `LINKEDIN_ACCESS_TOKEN` — LinkedIn Sales Navigator long-lived token
 - `OPENAI_API_KEY` — for `text-embedding-3-small` embeddings
+- `ZEROBOUNCE_API_KEY` — email verification (optional; NeverBounce as fallback)
 
-ZoomInfo is disabled by default (`ZOOMINFO_ENABLED=false`). Set to `true` and add credentials when available.
+Optional adapters (disabled by default):
+- `ZOOMINFO_ENABLED=true` + credentials
+- `APOLLO_ENABLED=true` + `APOLLO_API_KEY`
 
 ### 2. Salesforce Connected App setup
 
@@ -101,6 +113,13 @@ Create a Connected App with **JWT Bearer** flow:
 2. Enable OAuth, add scopes: `api`, `refresh_token`, `offline_access`
 3. Enable **Use digital signatures**, upload your RSA public key
 4. Note the Consumer Key → `SF_CONSUMER_KEY`
+
+Custom fields required on the Lead object (metadata in `force-app/`):
+- `Lead_Score__c` (Number) — composite lead quality score 0–100
+- `Company_Size__c` (Picklist) — headcount bucket
+- `Industry_Vertical__c` (Text) — industry vertical
+- `Annual_Revenue__c` (Text) — annual revenue string
+- `Tech_Stack__c` (Long Text Area) — comma-separated technologies
 
 Generate a key pair if needed:
 ```bash
@@ -150,6 +169,46 @@ curl http://localhost:8000/tasks/<task_id>
 
 ---
 
+## Intent webhook
+
+External systems can push real-time signals (job changes, funding events, web visits) to trigger immediate re-enrichment of a lead:
+
+```bash
+# Compute HMAC-SHA256 signature
+BODY='{"lead_id": "00Q000001", "signal": "job_change", "source": "clearbit"}'
+SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$INTENT_WEBHOOK_SECRET" | awk '{print $2}')
+
+curl -X POST http://localhost:8000/webhook/intent \
+  -H "Content-Type: application/json" \
+  -H "X-Signature: sha256=$SIG" \
+  -d "$BODY"
+```
+
+Supported signals: `job_change`, `funding`, `web_visit`.
+
+The webhook invalidates the vector cache for that lead and dispatches a high-priority (9) Celery task.
+
+---
+
+## Observability
+
+```bash
+# JSON metrics (cache hit rate, confidence distribution, provider match rates)
+curl http://localhost:8000/stats
+
+# CSV export for non-engineers
+curl -o stats.csv http://localhost:8000/stats/export
+```
+
+Metrics tracked in Redis:
+- `cache_hit_rate` (24h + 7d rolling)
+- `confidence_distribution` (bucketed: 0.95–1.00, 0.90–0.95, 0.80–0.90, 0.60–0.80, 0.00–0.60)
+- `per_provider_match_rate` (linkedin, zoominfo, apollo)
+- `review_queue_size`
+- `leads_enriched_last_run`
+
+---
+
 ## Configuration reference
 
 | Variable | Default | Description |
@@ -161,20 +220,44 @@ curl http://localhost:8000/tasks/<task_id>
 | `BATCH_SIZE` | `1000` | Leads per Celery task |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Local model for conflict resolution |
 | `ZOOMINFO_ENABLED` | `false` | Set `true` once ZoomInfo credentials are available |
+| `APOLLO_ENABLED` | `false` | Set `true` once Apollo API key is available |
+| `INTENT_WEBHOOK_SECRET` | — | HMAC-SHA256 shared secret for webhook validation |
 
 ---
 
 ## Reconciliation logic
 
-When LinkedIn and ZoomInfo return different values for the same field:
+Three-source waterfall: **LinkedIn > ZoomInfo > Apollo**.
 
-1. Only one source has the field → use it (confidence 0.90)
-2. Both sources agree → use it (confidence 1.00)
-3. One source is empty → use the non-empty one (confidence 0.85)
-4. Both conflict, both valid → prefer ZoomInfo for email, LinkedIn for phone (confidence 0.80)
+When sources return different values for the same field:
+
+1. All valid sources agree → use it (confidence 1.00)
+2. Only one source has a valid value → use it (confidence 0.90)
+3. LinkedIn + ZoomInfo conflict, both valid → prefer ZoomInfo for email, LinkedIn for phone (confidence 0.80)
+4. LinkedIn + ZoomInfo both miss, Apollo has a value → use Apollo (confidence 0.75)
 5. None of the above → ask Ollama to decide (variable confidence)
 
+After reconciliation, **email verification** adjusts confidence:
+- Valid: +0.10
+- Invalid: −0.20
+- Catch-all: ±0.00
+- Unknown: −0.05
+
 Leads where the final confidence falls below `CONFIDENCE_THRESHOLD` are written to a **review queue** for human validation rather than auto-applied.
+
+Firmographic fields (`company_size`, `industry`, `annual_revenue`, `tech_stack`) use a simple first-non-null waterfall: LinkedIn → ZoomInfo → Apollo.
+
+---
+
+## Lead scoring
+
+Each lead receives a composite score (0–100) written to `Lead_Score__c`:
+
+| Signal | Weight | Source |
+|---|---|---|
+| Completeness | 30% | Local calculation — how many fields are populated post-enrichment |
+| Activity | 35% | Salesforce Task/Event queries via REST API |
+| Marketing engagement | 35% | Marketing Cloud email engagement metrics |
 
 ---
 
@@ -187,6 +270,6 @@ ruff check .
 # Type check
 mypy app
 
-# Run tests with coverage
+# Run tests
 pytest --tb=short -v
 ```
