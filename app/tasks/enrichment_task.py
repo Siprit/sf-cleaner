@@ -12,12 +12,14 @@ from app.tasks.celery_app import celery_app
 log = logging.getLogger(__name__)
 
 
-async def _process_lead(lead: dict) -> LeadState:
+async def _process_lead(lead: dict, sf_access_token: str, sf_instance_url: str) -> LeadState:
     initial: LeadState = {
         "lead_id": lead["id"],
         "raw_lead": lead,
         "cache_hit": False,
         "confidence": 0.0,
+        "sf_access_token": sf_access_token,
+        "sf_instance_url": sf_instance_url,
     }
     return await enrichment_graph.ainvoke(initial)
 
@@ -34,6 +36,10 @@ def enrich_lead_batch(self, leads: list[dict]) -> dict:
         Summary dict with counts of update / review / skip / error actions.
     """
     sf_client = SalesforceClient()
+    # Authenticate once up front so the token is available for all per-lead
+    # activity queries inside the score_lead graph node.
+    access_token = sf_client.access_token
+    instance_url = sf_client.instance_url
 
     updates: list[LeadUpdate] = []
     review: list[str] = []
@@ -42,7 +48,7 @@ def enrich_lead_batch(self, leads: list[dict]) -> dict:
 
     async def run_batch():
         nonlocal skipped, errors
-        tasks = [_process_lead(lead) for lead in leads]
+        tasks = [_process_lead(lead, access_token, instance_url) for lead in leads]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for lead, result in zip(leads, results):
@@ -59,6 +65,7 @@ def enrich_lead_batch(self, leads: list[dict]) -> dict:
                         id=lead["id"],
                         email=reconciled.get("email"),
                         phone=reconciled.get("phone"),
+                        lead_score=result.get("lead_score"),
                     )
                 )
             elif action == "review":

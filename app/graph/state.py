@@ -11,3 +11,9 @@ class LeadState(TypedDict, total=False):
     cache_hit: bool
     action: Literal["update", "review", "skip"]
     error: str | None
+    # Scoring
+    lead_score: float | None        # 0–100 composite; written to Lead_Score__c
+    score_breakdown: dict | None    # {completeness, activity, marketing} for observability
+    # SF REST credentials — set by the task runner, consumed by score_lead node
+    sf_access_token: str | None
+    sf_instance_url: str | None

@@ -9,6 +9,7 @@ from app.enrichment.linkedin import LinkedInAdapter
 from app.enrichment.zoominfo import get_zoominfo_adapter
 from app.graph.state import LeadState
 from app.reconcile.rules import reconcile
+from app.scoring.scorer import compute_score
 from app.vector.cache import VectorCache
 
 log = structlog.get_logger()
@@ -68,6 +69,52 @@ async def reconcile_data(state: LeadState) -> LeadState:
         zoominfo=state.get("zoominfo_data"),
     )
     return {**state, "reconciled": merged, "confidence": confidence}
+
+
+async def score_lead(state: LeadState) -> LeadState:
+    """
+    Compute the three-signal lead score (completeness + activity + MC engagement).
+
+    Requires sf_access_token and sf_instance_url to be present in state so the
+    activity sub-scorer can query Task/Event via the SF REST API. If credentials
+    are absent (e.g. during unit tests), the node logs a warning and sets
+    lead_score to None rather than crashing the workflow.
+    """
+    access_token = state.get("sf_access_token")
+    instance_url = state.get("sf_instance_url")
+
+    if not access_token or not instance_url:
+        log.warning("score_lead_skipped", lead_id=state["lead_id"], reason="no_sf_credentials")
+        return {**state, "lead_score": None, "score_breakdown": None}
+
+    try:
+        result = await compute_score(
+            lead_id=state["lead_id"],
+            raw_lead=state["raw_lead"],
+            reconciled=state.get("reconciled"),
+            access_token=access_token,
+            instance_url=instance_url,
+        )
+        log.info(
+            "lead_scored",
+            lead_id=state["lead_id"],
+            total=result.total,
+            completeness=result.completeness,
+            activity=result.activity,
+            marketing=result.marketing,
+        )
+        return {
+            **state,
+            "lead_score": result.total,
+            "score_breakdown": {
+                "completeness": result.completeness,
+                "activity": result.activity,
+                "marketing": result.marketing,
+            },
+        }
+    except Exception as exc:
+        log.warning("score_lead_failed", lead_id=state["lead_id"], error=str(exc))
+        return {**state, "lead_score": None, "score_breakdown": None}
 
 
 async def confidence_score(state: LeadState) -> LeadState:

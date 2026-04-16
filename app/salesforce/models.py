@@ -23,3 +23,4 @@ class LeadUpdate(BaseModel):
     id: str
     email: str | None = None
     phone: str | None = None
+    lead_score: float | None = None  # maps to Lead_Score__c custom field

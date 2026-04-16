@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Lead_Score__c</fullName>
+    <label>Lead Score</label>
+    <description>Composite lead quality score (0–100) computed nightly by sf-cleaner. Weighted from three signals: data completeness (30%), Salesforce activity depth (35%), and Marketing Cloud email engagement (35%).</description>
+    <type>Number</type>
+    <precision>5</precision>
+    <scale>1</scale>
+    <required>false</required>
+    <externalId>false</externalId>
+    <trackFeedHistory>false</trackFeedHistory>
+    <trackHistory>true</trackHistory>
+</CustomField>

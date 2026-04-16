@@ -67,11 +67,23 @@ class SalesforceClient:
         self._instance_url = data["instance_url"]
 
     @property
-    def _headers(self) -> dict:
+    def access_token(self) -> str:
+        """Return the bearer token, authenticating lazily if needed."""
         if not self._access_token:
             self.authenticate()
+        return self._access_token  # type: ignore[return-value]
+
+    @property
+    def instance_url(self) -> str:
+        """Return the instance URL, authenticating lazily if needed."""
+        if not self._instance_url:
+            self.authenticate()
+        return self._instance_url  # type: ignore[return-value]
+
+    @property
+    def _headers(self) -> dict:
         return {
-            "Authorization": f"Bearer {self._access_token}",
+            "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
 
@@ -123,12 +135,24 @@ class SalesforceClient:
     # ── Bulk API 2.0 Write ────────────────────────────────────────────────────
 
     def bulk_update_leads(self, updates: list[LeadUpdate]) -> None:
-        """Write email/phone updates back to Salesforce in one bulk job."""
+        """Write email, phone, and lead score updates back to Salesforce in one bulk job.
+
+        Lead_Score__c must exist as a Number field on the Lead object in your SF org.
+        Create it via Setup → Object Manager → Lead → Fields & Relationships → New.
+        """
         if not updates:
             return
 
-        rows = [{"Id": u.id, "Email": u.email or "", "Phone": u.phone or ""} for u in updates]
-        csv_body = self._to_csv(rows, fieldnames=["Id", "Email", "Phone"])
+        rows = [
+            {
+                "Id": u.id,
+                "Email": u.email or "",
+                "Phone": u.phone or "",
+                "Lead_Score__c": str(u.lead_score) if u.lead_score is not None else "",
+            }
+            for u in updates
+        ]
+        csv_body = self._to_csv(rows, fieldnames=["Id", "Email", "Phone", "Lead_Score__c"])
 
         job_id = self._create_ingest_job()
         self._upload_csv(job_id, csv_body)

@@ -8,6 +8,7 @@ from app.graph.nodes import (
     linkedin_enrich,
     reconcile_data,
     route_output,
+    score_lead,
     update_cache,
     zoominfo_enrich,
 )
@@ -25,6 +26,7 @@ def build_graph():
     g.add_node("linkedin_enrich", linkedin_enrich)
     g.add_node("zoominfo_enrich", zoominfo_enrich)
     g.add_node("reconcile_data", reconcile_data)
+    g.add_node("score_lead", score_lead)
     g.add_node("confidence_score", confidence_score)
     g.add_node("update_cache", update_cache)
     g.add_node("route_output", route_output)
@@ -36,7 +38,9 @@ def build_graph():
     g.add_edge("linkedin_enrich", "zoominfo_enrich")   # sequential fallback; swap to fan-out if needed
     g.add_edge("zoominfo_enrich", "reconcile_data")
 
-    g.add_edge("reconcile_data", "confidence_score")
+    # score_lead runs after reconcile so completeness reflects post-enrichment state
+    g.add_edge("reconcile_data", "score_lead")
+    g.add_edge("score_lead", "confidence_score")
     g.add_edge("confidence_score", "update_cache")
     g.add_edge("update_cache", "route_output")
     g.add_edge("route_output", END)
